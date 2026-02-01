@@ -193,9 +193,9 @@ def run_marl_episode(episode_idx, mec_state, ho_state, steps_per_episode):
 
 def train():
     MAX_EPISODES = 10000
-    STEPS_PER_EPISODE = 50
-    BATCH_SIZE = 2048
-    LR = 1e-5 # Ultra-low for synergistic fine-tuning
+    STEPS_PER_EPISODE = 200 # Increased from 50
+    BATCH_SIZE = 256 # Reduced for stability
+    LR = 1e-3 # Increased from 1e-5 for faster convergence
     
     MEC_PATH = os.path.join(project_root, "models", "mec_policy.pth")
     HO_PATH = os.path.join(project_root, "models", "ho_policy.pth")
@@ -222,9 +222,11 @@ def train():
     pbar = tqdm(total=MAX_EPISODES)
     current_ep = 0
     
-    with Parallel(n_jobs=-1) as parallel:
+    # DEBUG MODE: Single Thread Execution to catch errors
+    with Parallel(n_jobs=4) as parallel:
+    # if True: # Force linear execution
         while current_ep < MAX_EPISODES:
-            n_batch = cpu_count()
+            n_batch = 64 # Smaller batch for linear debug
             if current_ep + n_batch > MAX_EPISODES:
                 n_batch = MAX_EPISODES - current_ep
                 
@@ -232,6 +234,10 @@ def train():
             mec_state = {k: v.cpu() for k, v in mec_marl.network.state_dict().items()}
             ho_state = {k: v.cpu() for k, v in ho_marl.network.state_dict().items()}
             
+            # Linear execution
+            # results = [run_marl_episode(idx, mec_state, ho_state, STEPS_PER_EPISODE) for idx in task_ids]
+            
+            # Parallel execution (commented out)
             results = parallel(
                 delayed(run_marl_episode)(idx, mec_state, ho_state, STEPS_PER_EPISODE)
                 for idx in task_ids
@@ -253,16 +259,28 @@ def train():
                 ho_marl.update(ho_buffer)
                 ho_buffer = {'obs':[], 'act':[], 'logprob':[], 'rew':[], 'val':[], 'done':[]}
                 
-            # Best & Save
+            # Best & Save (Rolling Average Validation)
+            # Only consider "Best" if we have a stable history of >100 episodes
             if len(stats_history) >= 100:
                 avg_sr = np.mean([s['sr'] for s in stats_history[-100:]])
-                if avg_sr > best_sr:
+                
+                # Check for "Real" improvement (ignore noise < 1%)
+                if avg_sr > (best_sr + 0.01):
+                    print(f"\n[Train] New Best Model Found! SR: {best_sr:.3f} -> {avg_sr:.3f}")
                     best_sr = avg_sr
+                    
+                    # Save best model to the main loading path used by benchmark
+                    mec_marl.save(os.path.join(project_root, "models", "mec_policy.pth"))
+                    ho_marl.save(os.path.join(project_root, "models", "ho_policy.pth"))
+                    # Also keep a backup
                     mec_marl.save(os.path.join(project_root, "models", "mec_policy_best.pth"))
                     ho_marl.save(os.path.join(project_root, "models", "ho_policy_best.pth"))
 
             if current_ep % 500 == 0:
                 pd.DataFrame(stats_history).to_csv(os.path.join(project_root, "data", "training_metrics.csv"), index=False)
+                # Checkpoint
+                mec_marl.save(os.path.join(project_root, "models", f"mec_policy_ep{current_ep}.pth"))
+                ho_marl.save(os.path.join(project_root, "models", f"ho_policy_ep{current_ep}.pth"))
                 
             current_ep += n_batch
             pbar.update(n_batch)

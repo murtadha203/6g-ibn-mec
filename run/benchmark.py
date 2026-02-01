@@ -105,7 +105,8 @@ def run_joint_episode(mec_net_state, ho_net_state, mec_intent, ho_intent,
         ho_decision = None
         if ho_agent:
             obs_ho = ho_agent.get_observation(ctx)
-            ho_action, _, _ = ho_agent.select_action_with_info(obs_ho)
+            # Pass context for Safety Shield
+            ho_action, _, _ = ho_agent.select_action_with_info(obs_ho, context=ctx)
             ho_decision = int(ho_action)
         else:
             # Baseline: Let the sim's internal greedy baseline handle it
@@ -158,7 +159,8 @@ def exp_1_synergy(mec_state, ho_state):
     ]
     
     # High Stress: Speed=20m/s, Load=50
-    intent_ho = (0.5, 0.5, 0.0) # Balanced Throughput/Stability
+    # FIX: Add Reliability (Gamma=0.2) to prevent reckless handovers
+    intent_ho = (0.4, 0.4, 0.2) # Balanced Throughput/Stability
     intent_mec = (0.5, 0.5, 0.0)
     
     data = []

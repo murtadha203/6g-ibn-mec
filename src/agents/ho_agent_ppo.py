@@ -65,22 +65,49 @@ class HOAgentPPO(BasePPOAgent, HOAgent):
         else:
             return single_obs
        
-    def select_action(self, observation: np.ndarray):
+    def select_action(self, observation: np.ndarray, context=None):
         """
-        PPO Action Selection: Sample from policy.
-        Returns: action (int)
-        
-        Note: PPO needs log_prob and value for update.
-        In training loop, we must call select_action_with_info() instead.
-        This method is kept for compatibility with evaluating code.
+        PPO Action Selection with Hybrid Safety Shield.
         """
+        # 1. Hybrid Safety Shield: Critical Physics Override
+        # If signal is dead (< -100 dBm), force handover to best known neighbor
+        # We need access to the context to see neighbor RSRPs. 
+        # If context is missing (during pure eval), we rely on policy.
+        if context is not None:
+            serving_id = context.get("serving_cell_id", 0)
+            rsrp_list = context.get("rsrp_dbm", [])
+            
+            if rsrp_list and serving_id < len(rsrp_list):
+                current_rsrp = rsrp_list[serving_id]
+                
+                # SURVIVAL INSTINCT
+                if current_rsrp < -100.0:
+                    # Find best neighbor
+                    best_cell = int(np.argmax(rsrp_list))
+                    if best_cell != serving_id:
+                        # print(f"[Shield] Override: Forced HO {serving_id} -> {best_cell} (RSRP {current_rsrp:.1f})")
+                        return best_cell
+
         action, _, _ = BasePPOAgent.select_action(self, observation)
         return action
 
-    def select_action_with_info(self, observation: np.ndarray):
+    def select_action_with_info(self, observation: np.ndarray, context=None):
         """
         Returns action, log_prob, value for training buffer.
         """
+        # Apply same shield logic
+        if context is not None:
+            serving_id = context.get("serving_cell_id", 0)
+            rsrp_list = context.get("rsrp_dbm", [])
+            
+            if rsrp_list and serving_id < len(rsrp_list):
+                current_rsrp = rsrp_list[serving_id]
+                if current_rsrp < -100.0:
+                    best_cell = int(np.argmax(rsrp_list))
+                    if best_cell != serving_id:
+                        # Return dummy logprob/val for the override action
+                        return best_cell, 0.0, 0.0
+
         return BasePPOAgent.select_action(self, observation)
         
     def get_metrics(self):
